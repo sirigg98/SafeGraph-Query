@@ -7,13 +7,13 @@ from datetime import datetime as dt
 import os
 import concurrent.futures
 import time
-from requests.exceptions import Timeout, RequestException
+import pickle
 from concurrent.futures import wait, ALL_COMPLETED
 import IPython as ipy
 
 start = dt.now()
 # Change working directory
-os.chdir('C:\\Users\\F0064WK\\OneDrive - Tuck School of Business at Dartmouth College\\Documents\Trade sentiments\data\Safegraph')
+os.chdir('C:\\Users\\F0064WK\\OneDrive - Tuck School of Business at Dartmouth College\\Documents\Trade sentiments\data\Safegraph\Weekly Patterns')
 
 dates = ['2019-04-20', '2019-04-27', '2019-05-04', '2019-06-08', '2019-06-15',
          '2020-04-20', '2020-04-27', '2020-05-04', '2020-06-08', '2020-06-15']
@@ -35,19 +35,19 @@ headers = {
 ######################### SafeGraph Query module ############################
 
 
-def SafeGraph_query(q, date):
+def query(product, date, num_records = 20, records_after = 0, retries = 10):
     start = time.perf_counter()
+    q = round(records_after/num_records)
     # Queries (for first query and following queries)
     #q = 1
-    k= 500*q
-    if q == 0:
+    if records_after == 0:
         query = '''query {
-          search(first: 500 filter: {
+          search(first:''' + str(num_records) + '''filter: {
             address:{
               iso_country_code: "US"
             }
           }) {
-            safegraph_weekly_patterns (date: "''' + date + '''") {
+            safegraph_''' + product + '''(date: "''' + date + '''") {
               placekey
               parent_placekey
               location_name
@@ -80,12 +80,12 @@ def SafeGraph_query(q, date):
         }'''
     else:
         query = '''query {
-              search(first: 500 after: ''' + str(k) + ''' filter: {
+              search(first: ''' + str(num_records) + ''' after: ''' + str(records_after) + ''' filter: {
                 address:{
                   iso_country_code: "US"
                 }
               }) {
-                safegraph_weekly_patterns (date: "''' + date + '''") {
+                safegraph_''' + product + ''' (date: "''' + date + '''") {
                   placekey
                   parent_placekey
                   location_name
@@ -119,7 +119,7 @@ def SafeGraph_query(q, date):
 # API call
     p = 1
     print(f"Try no. {p} for query {q+1}")
-    while p < 2:
+    while p < retries + 1:
         response = requests.post(url, headers=headers, json={'query': query})
         if response.status_code != 200:
             print("An Error occurred for query " + str(q+1) + " on try no." + str(p) + " (Code: " + str(response.status_code) + ")") 
@@ -145,29 +145,34 @@ def SafeGraph_query(q, date):
 
 ###############################################################################
 
-for date in dates: 
-    print("start querying for " + date)
-    
-    final_df = pd.DataFrame()
-    fail = []
-    
-    
-    with concurrent.futures.ThreadPoolExecutor(max_workers = 5) as executor:
-        results = [executor.submit(SafeGraph_query, i, date) for i in range(16000)]
-        concurrent.futures.wait(results, return_when=ALL_COMPLETED)
-        for f in concurrent.futures.as_completed(results):
-            f_df = f.result()[0]
-            final_df = f_df.append(final_df)
-            if f_df.empty:
-                fail.append(f.result()[1]+1)
-            # try:
-            #     f_df = f.result()
-            #     final_df = f_df.append(final_df)
-            # except TypeError:
-            #     f_df = pd.DataFrame()
-            #     final_df = f_df.append(final_df)
-            
-    finish = dt.now()
-    print(f'Started querying for {date} at {start} finished at {finish}')
-    # # Save with date as filename to csv
-    final_df.to_csv(f"{date}.csv")
+
+##Calculatesqueries based on date, number of queries and number of threads. Saves Dataframes and a text file with queries that experienced errors by week to worjking directory
+def SafeGraph_query(num_queries, num_threads = 1, retries = 10, dates = None):
+    start = dt.now()
+    if dates == None:
+        print("You forgot the date")
+    for date in dates: 
+        print("start querying for " + date)
+        
+        final_df = pd.DataFrame()
+        fail = []
+        
+        
+        with concurrent.futures.ThreadPoolExecutor(max_workers = num_threads) as executor:
+            results = [executor.submit(query, "weekly_patterns", date, 500, i*500, retries) for i in range(num_queries)]
+            concurrent.futures.wait(results, return_when=ALL_COMPLETED)
+            for f in concurrent.futures.as_completed(results):
+                f_df = f.result()[0]
+                final_df = f_df.append(final_df)
+                if f_df.empty:
+                    fail.append(f.result()[1]+1)
+                
+        with open(f"missed queries for {date}.txt", "w") as f:
+            for s in fail:
+                f.write(str(s) +", ")     #Query index, not the number! Index = Number - 1
+        finish = dt.now()
+        print(f'Started querying for {date} at {start} finished at {finish}')
+        # # Save with date as filename to csv
+        final_df.to_csv(f"{date}.csv")
+
+SafeGraph_query(num_queries= 40, num_threads = 8, retries = 10, dates = dates)
